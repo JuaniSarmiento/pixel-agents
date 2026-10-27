@@ -31,6 +31,17 @@ function tileCenter(col: number, row: number): { x: number; y: number } {
   };
 }
 
+/** Area label of a tile, or null when the layout has no Areas or the tile is unlabeled. */
+function areaLabelAt(
+  col: number,
+  row: number,
+  areaTiles: Array<string | null> | undefined,
+  cols: number,
+): string | null {
+  if (!areaTiles || areaTiles.length === 0 || cols <= 0) return null;
+  return areaTiles[row * cols + col] ?? null;
+}
+
 /** Direction from one tile to an adjacent tile */
 function directionBetween(
   fromCol: number,
@@ -96,6 +107,7 @@ export function updateCharacter(
   seats: Map<string, Seat>,
   tileMap: TileTypeVal[][],
   blockedTiles: Set<string>,
+  areaTiles?: Array<string | null>,
 ): void {
   ch.frameTimer += dt;
 
@@ -187,7 +199,18 @@ export function updateCharacter(
           }
         }
         if (walkableTiles.length > 0) {
-          const target = walkableTiles[Math.floor(Math.random() * walkableTiles.length)];
+          // Wander only within the character's own Area (the Area of its
+          // seat), so it does not stroll into a neighboring department.
+          // Falls back to the whole office when there is no seat/Area to
+          // anchor to, or the layout has no Areas at all.
+          const cols = tileMap[0]?.length ?? 0;
+          const seat = ch.seatId ? seats.get(ch.seatId) : undefined;
+          const homeArea = seat ? areaLabelAt(seat.seatCol, seat.seatRow, areaTiles, cols) : null;
+          const pool = homeArea
+            ? walkableTiles.filter((t) => areaLabelAt(t.col, t.row, areaTiles, cols) === homeArea)
+            : walkableTiles;
+          const candidates = pool.length > 0 ? pool : walkableTiles;
+          const target = candidates[Math.floor(Math.random() * candidates.length)];
           const path = findPath(
             ch.tileCol,
             ch.tileRow,
