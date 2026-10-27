@@ -23,6 +23,18 @@ export function isReadingTool(tool: string | null): boolean {
   return isReadingToolName(tool);
 }
 
+/**
+ * True when a character's TYPE pose is a real seated pose (sitting in an
+ * actual chair). CharacterState.TYPE is also used as "type in place" for
+ * characters with no seat — sub-agents (CONTEXT.md: visualized "around" their
+ * parent, "not in a seat") and the no-free-seat fallback for top-level agents
+ * — which must render standing, not sunk into the floor as if sitting in a
+ * chair that isn't there.
+ */
+export function isSeatedTypePose(ch: Pick<Character, 'state' | 'seatId'>): boolean {
+  return ch.state === CharacterState.TYPE && ch.seatId !== null;
+}
+
 /** Pixel center of a tile */
 function tileCenter(col: number, row: number): { x: number; y: number } {
   return {
