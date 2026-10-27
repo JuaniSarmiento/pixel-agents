@@ -4,6 +4,7 @@ import type { HookProvider } from '../../core/src/provider.js';
 import type { AgentStateStore } from './agentStateStore.js';
 import { TEXT_IDLE_DELAY_MS, TOOL_DONE_DELAY_MS } from './constants.js';
 import { updateContextUsage } from './contextUsage.js';
+import { codexProvider } from './providers/hook/codex/codex.js';
 import { hasInlineTeammates, hasPromotedBackgroundAgent } from './teamUtils.js';
 import {
   cancelPermissionTimer,
@@ -90,6 +91,45 @@ export function formatToolStatus(toolName: string, input: Record<string, unknown
   return hookProvider?.formatToolStatus(toolName, input) ?? `Using ${toolName}`;
 }
 
+function processCodexLine(agentId: number, line: string, agents: AgentStateStore): void {
+  const agent = agents.get(agentId);
+  const event = codexProvider.parseTranscriptLine?.(line);
+  if (!agent || !event) return;
+  const clearTool = (toolId: string) => {
+    if (!agent.activeToolIds.delete(toolId)) return;
+    agent.activeToolStatuses.delete(toolId);
+    agent.activeToolNames.delete(toolId);
+    agents.broadcast({ type: 'agentToolDone', id: agentId, toolId });
+  };
+  if (event.kind === 'toolStart') {
+    if (event.toolId !== 'codex-thinking') clearTool('codex-thinking');
+    const status = codexProvider.formatToolStatus(event.toolName, event.input);
+    agent.activeToolIds.add(event.toolId);
+    agent.activeToolStatuses.set(event.toolId, status);
+    agent.activeToolNames.set(event.toolId, event.toolName);
+    agent.isWaiting = false;
+    agents.broadcast({ type: 'agentStatus', id: agentId, status: 'active' });
+    agents.broadcast({
+      type: 'agentToolStart',
+      id: agentId,
+      toolId: event.toolId,
+      toolName: event.toolName,
+      status,
+    });
+  } else if (event.kind === 'toolEnd') {
+    clearTool(event.toolId);
+  } else if (event.kind === 'turnEnd') {
+    for (const toolId of [...agent.activeToolIds]) clearTool(toolId);
+    agent.isWaiting = true;
+    agents.broadcast({
+      type: 'agentStatus',
+      id: agentId,
+      status: 'waiting',
+      awaitingInput: event.awaitingInput === true,
+    });
+  }
+}
+
 export function processTranscriptLine(
   agentId: number,
   line: string,
@@ -101,6 +141,10 @@ export function processTranscriptLine(
   if (!agent) return;
   agent.lastDataAt = Date.now();
   agent.linesProcessed++;
+  if (agent.providerId === 'codex') {
+    processCodexLine(agentId, line, agents);
+    return;
+  }
   try {
     const record = JSON.parse(line);
 
