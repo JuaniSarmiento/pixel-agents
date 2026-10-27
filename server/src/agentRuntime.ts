@@ -497,6 +497,26 @@ export class AgentRuntime {
         if (p.id > maxId) maxId = p.id;
         continue;
       }
+      // This runs on every webviewReady handshake (reconnect, page reload),
+      // not just once at boot. A stale on-disk snapshot can still carry an id
+      // for a session that THIS boot's scanners already adopted under a
+      // DIFFERENT id (ids are assigned by scan order, which depends on
+      // directory iteration and which sessions existed at that boot). The
+      // `store.has(p.id)` check above only catches a same-id collision —
+      // check the file too, or a stale record mints a second character for
+      // an already-live session.
+      let alreadyLive = false;
+      for (const agent of this.store.values()) {
+        if (pathsMatch(agent.jsonlFile, p.jsonlFile)) {
+          alreadyLive = true;
+          break;
+        }
+      }
+      if (alreadyLive) {
+        this.knownJsonlFiles.add(p.jsonlFile);
+        if (p.id > maxId) maxId = p.id;
+        continue;
+      }
 
       const agent = createAgentState({
         id: p.id,
