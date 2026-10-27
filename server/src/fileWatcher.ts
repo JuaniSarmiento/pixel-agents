@@ -33,6 +33,7 @@ import type { ITerminalAdapter } from '../../core/src/terminalAdapter.js';
 import { createAgentState } from './agentState.js';
 import type { AgentStateStore } from './agentStateStore.js';
 import { readClaudeProcesses, resolveLiveClaudeSessions } from './claudeProcesses.js';
+import { type CodexSession, discoverCodexSessions } from './codexSessions.js';
 import {
   CLEAR_IDLE_THRESHOLD_MS,
   EXTERNAL_ACTIVE_THRESHOLD_MS,
@@ -45,7 +46,9 @@ import {
   SESSION_RECENT_ACTIVITY_MS,
 } from './constants.js';
 import { seedContextUsage } from './contextUsage.js';
+import { directoryNameForLaunch } from './directories.js';
 import type { DismissalTracker } from './dismissalTracker.js';
+import { hostDirectory } from './hostDirectory.js';
 import { assignPaletteIfNeeded } from './paletteAssigner.js';
 import { pathsMatch } from './pathKey.js';
 import type { SubagentWatch } from './subagentWatch.js';
@@ -1136,6 +1139,8 @@ function adoptExternalSession(
 
   persistAgents: () => void,
   directoryName?: string,
+  providerId?: string,
+  sessionId?: string,
 ): void {
   const id = nextAgentIdRef.current++;
   // Decide whether to replay the existing file content or skip to its end.
@@ -1164,12 +1169,29 @@ function adoptExternalSession(
     const ageMs = stat.birthtimeMs > 0 ? Date.now() - stat.birthtimeMs : Number.POSITIVE_INFINITY;
     const freshnessWindowMs = EXTERNAL_SCAN_INTERVAL_MS * 2;
     fileOffset = ageMs <= freshnessWindowMs ? 0 : stat.size;
+    if (providerId === 'codex') {
+      // Replay a bounded suffix so an already-running session has a status on attach.
+      const start = Math.max(0, stat.size - 65536);
+      if (start === 0) fileOffset = 0;
+      else {
+        const buffer = Buffer.alloc(stat.size - start);
+        const fd = fs.openSync(jsonlFile, 'r');
+        try {
+          const count = fs.readSync(fd, buffer, 0, buffer.length, start);
+          const newline = buffer.subarray(0, count).indexOf(10);
+          fileOffset = newline < 0 ? stat.size : start + newline + 1;
+        } finally {
+          fs.closeSync(fd);
+        }
+      }
+    }
   } catch {
     /* start from beginning if stat fails */
   }
   const agent = createAgentState({
     id,
-    sessionId: path.basename(jsonlFile, '.jsonl'),
+    sessionId: sessionId ?? path.basename(jsonlFile, '.jsonl'),
+    providerId,
     isExternal: true,
     projectDir,
     jsonlFile,
@@ -1217,6 +1239,20 @@ export function startExternalSessionScanning(
   hooksEnabledRef?: { current: boolean },
 ): ReturnType<typeof setInterval> {
   return setInterval(() => {
+    const codexSessions = discoverCodexSessions();
+    if (codexSessions !== null) {
+      scanCodexSessions(
+        codexSessions,
+        knownJsonlFiles,
+        nextAgentIdRef,
+        agents,
+        fileWatchers,
+        pollingTimers,
+        waitingTimers,
+        permissionTimers,
+        persistAgents,
+      );
+    }
     // Scan all tracked project dirs in both hooks and heuristic modes. Hooks are
     // a fast path for producers that emit hook events; polling remains the
     // discovery path for workspace JSONL sessions created without hooks.
@@ -1248,6 +1284,58 @@ export function startExternalSessionScanning(
       );
     }
   }, EXTERNAL_SCAN_INTERVAL_MS);
+}
+
+/** Synchronize Codex characters with live, recently active sessions. */
+export function scanCodexSessions(
+  sessions: CodexSession[],
+  knownJsonlFiles: Set<string>,
+  nextAgentIdRef: { current: number },
+  agents: AgentStateStore,
+  fileWatchers: Map<number, fs.FSWatcher>,
+  pollingTimers: Map<number, ReturnType<typeof setInterval>>,
+  waitingTimers: Map<number, ReturnType<typeof setTimeout>>,
+  permissionTimers: Map<number, ReturnType<typeof setTimeout>>,
+  persistAgents: () => void,
+): void {
+  const liveFiles = new Set(sessions.map((session) => session.filePath));
+  for (const [id, agent] of agents) {
+    if (agent.providerId === 'codex' && !liveFiles.has(agent.jsonlFile)) {
+      knownJsonlFiles.delete(agent.jsonlFile);
+      agentRemovalCallback?.(id);
+    }
+  }
+  for (const session of sessions) {
+    if (
+      knownJsonlFiles.has(session.filePath) ||
+      [...agents.values()].some((a) => pathsMatch(a.jsonlFile, session.filePath))
+    )
+      continue;
+    if (
+      dismissalTracker?.isDismissed(session.filePath) ||
+      dismissalTracker?.isPermanentlyDismissed(session.filePath)
+    )
+      continue;
+    const directoryName =
+      directoryNameForLaunch(session.cwd, [hostDirectory()]) ??
+      directoryNameResolver?.({ cwd: session.cwd }) ??
+      path.basename(session.cwd);
+    knownJsonlFiles.add(session.filePath);
+    adoptExternalSession(
+      session.filePath,
+      path.dirname(session.filePath),
+      nextAgentIdRef,
+      agents,
+      fileWatchers,
+      pollingTimers,
+      waitingTimers,
+      permissionTimers,
+      persistAgents,
+      directoryName,
+      'codex',
+      session.sessionId,
+    );
+  }
 }
 
 /** Scan a single project dir for external sessions. */
@@ -1534,7 +1622,7 @@ export function startStaleExternalAgentCheck(
     const toRemove: number[] = [];
 
     for (const [id, agent] of agents) {
-      if (!agent.isExternal) continue;
+      if (!agent.isExternal || agent.providerId === 'codex') continue;
       try {
         const stat = fs.statSync(agent.jsonlFile);
         if (processes === null) continue; // previous policy: keep while the transcript exists
