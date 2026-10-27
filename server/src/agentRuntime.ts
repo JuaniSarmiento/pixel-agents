@@ -108,6 +108,8 @@ export class AgentRuntime {
     // Background spawns (teams OFF): classify by sidecar name on spawn (named
     // -> teammate character, unnamed -> shadow-watched sub-agent), remove when
     // the completion queue-operation lands on the lead.
+    // The scanner keeps a shadow source's spawn ids separate from the visible
+    // lead it broadcasts to; never pass the shadow store as the main store.
     setBackgroundAgentDetectedCallback((leadId) => {
       scanForBackgroundAgentFiles(
         leadId,
@@ -129,7 +131,7 @@ export class AgentRuntime {
         }
       }
       // Unnamed spawns live in the shadow store; the webview sub-character is
-      // cleared by the lead-side queue-op subagentClear, not by this call.
+      // cleared by its watch, including projected nested keys and descendants.
       this.subagentWatch.removeBySpawn(leadId, toolUseId);
     });
     // A resumed lead that spawns again belongs to a freshly minted implicit
@@ -330,6 +332,9 @@ export class AgentRuntime {
     // Cancel timers
     cancelWaitingTimer(id, this.waitingTimers);
     cancelPermissionTimer(id, this.permissionTimers);
+
+    // Every removal path (including activity expiry) must stop descendant watches.
+    this.subagentWatch.removeByLead(id);
 
     // Notify adapter before deleting from store
     this.lifecycleCallbacks.onAgentRemoved?.(id, agent);

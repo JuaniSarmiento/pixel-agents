@@ -62,6 +62,8 @@ export interface TeamProvider {
     toolUseId?: string;
     description?: string;
     name?: string;
+    /** CLI agent identity of the spawner, for nested sub-agents and forks. */
+    parentAgentId?: string;
   }>;
 
   /** Detect a teammate spawn from a completed spawn-tool result on the LEAD's

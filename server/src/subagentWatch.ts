@@ -17,10 +17,12 @@
  * uses for the Subtask sub-character. No protocol change.
  */
 
-import type * as fs from 'fs';
+import * as fs from 'fs';
+import * as path from 'path';
 
 import { createAgentState } from './agentState.js';
 import { AgentStateStore } from './agentStateStore.js';
+import { SESSION_RECENT_ACTIVITY_MS } from './constants.js';
 import { readNewLines, startFileWatching } from './fileWatcher.js';
 import { pathsMatch } from './pathKey.js';
 import { cancelPermissionTimer, cancelWaitingTimer } from './timerManager.js';
@@ -28,14 +30,18 @@ import type { AgentState } from './types.js';
 
 /** Shadow ids start far above any real agent id. The transcript parser's
  *  module-level callbacks (background detected/completed, team switch) fire
- *  with shadow ids too; the offset guarantees they miss the main store and
- *  no-op instead of touching an unrelated real agent. */
+ *  with shadow ids too. Discovery resolves their source in the shadow store
+ *  and their visible lead separately, without inserting shadows into the main store. */
 const SHADOW_ID_BASE = 1_000_000;
 
 /** A sub-agent transcript adoption request (sidecar-backed, unnamed). */
 export interface SubagentWatchEntry {
   jsonlPath: string;
   toolUseId: string;
+  /** Actual transcript that spawned this child; may itself be a shadow. */
+  originAgentId?: number;
+  /** Forks have no spawn tool on the origin transcript. */
+  isFork?: boolean;
 }
 
 export class SubagentWatch {
@@ -48,7 +54,16 @@ export class SubagentWatch {
   /** Shadow id → the (lead, spawn tool) the webview keys the sub-character on.
    *  Kept here (not read off AgentState) so transcript-parser mutations of the
    *  shadow agent's team fields can never break the translation. */
-  private readonly subKeys = new Map<number, { leadId: number; spawnToolUseId: string }>();
+  private readonly subKeys = new Map<
+    number,
+    {
+      leadId: number;
+      spawnToolUseId: string;
+      originAgentId: number;
+      sourceToolUseId: string;
+      isFork: boolean;
+    }
+  >();
   /** Shadow id → tool ids started but not yet done (for toolsClear synthesis). */
   private readonly liveToolIds = new Map<number, Set<string>>();
 
@@ -65,9 +80,26 @@ export class SubagentWatch {
     return false;
   }
 
+  /** Resolve a shadow's visible lead without making the shadow a real agent. */
+  visibleLeadId(sourceId: number): number | undefined {
+    const leadId = this.subKeys.get(sourceId)?.leadId ?? sourceId;
+    return this.mainStore.has(leadId) ? leadId : undefined;
+  }
+
+  /** Match CLI parent identities against the transcript, never the shared session of a shadow. */
+  matchesParent(source: AgentState, parentAgentId: string): boolean {
+    const stem = path.basename(source.jsonlFile, '.jsonl');
+    return parentAgentId === stem || parentAgentId === stem.replace(/^agent-/, '');
+  }
+
   /** Start watching an unnamed background spawn's transcript for the given lead. */
   watch(lead: AgentState, leadId: number, entry: SubagentWatchEntry): void {
     const id = this.store.nextAgentId.current++;
+    const originAgentId = entry.originAgentId ?? leadId;
+    // The webview keys by (visible lead, spawn tool). Siblings from different
+    // shadow transcripts may reuse a tool id, so nested watches get their own key.
+    const spawnToolUseId =
+      originAgentId === leadId && !entry.isFork ? entry.toolUseId : `subagent:${id}`;
     const agent = createAgentState({
       id,
       // Shares the lead's session like the transcript it mirrors. Never
@@ -81,7 +113,13 @@ export class SubagentWatch {
       spawnToolUseId: entry.toolUseId,
     });
 
-    this.subKeys.set(id, { leadId, spawnToolUseId: entry.toolUseId });
+    this.subKeys.set(id, {
+      leadId,
+      spawnToolUseId,
+      originAgentId,
+      sourceToolUseId: entry.toolUseId,
+      isFork: entry.isFork ?? false,
+    });
     this.store.set(id, agent);
 
     console.log(
@@ -97,13 +135,30 @@ export class SubagentWatch {
       this.waitingTimers,
       this.permissionTimers,
     );
+    // Forks and flattened descendants have no main-store agentToolStart to
+    // create their character. Announce it through the existing lazy UI path.
+    if (originAgentId !== leadId || entry.isFork) {
+      this.mainStore.broadcast({
+        type: 'subagentToolStart',
+        id: leadId,
+        parentToolId: spawnToolUseId,
+        toolId: spawnToolUseId,
+        status: '',
+      });
+      this.mainStore.broadcast({
+        type: 'subagentToolDone',
+        id: leadId,
+        parentToolId: spawnToolUseId,
+        toolId: spawnToolUseId,
+      });
+    }
     readNewLines(id, this.store, this.waitingTimers, this.permissionTimers);
   }
 
   /** Stop the watch matching a completed spawn (queue-operation on the lead). */
   removeBySpawn(leadId: number, toolUseId: string): void {
     for (const [id, key] of this.subKeys) {
-      if (key.leadId === leadId && key.spawnToolUseId === toolUseId) {
+      if (key.originAgentId === leadId && key.sourceToolUseId === toolUseId) {
         this.remove(id);
         return;
       }
@@ -119,6 +174,22 @@ export class SubagentWatch {
     }
   }
 
+  /** Metadata-only forks have no completion tool. Bound their visibility by activity. */
+  pruneInactiveForks(): void {
+    for (const [id, key] of [...this.subKeys]) {
+      if (!key.isFork) continue;
+      const agent = this.store.get(id);
+      if (!agent) continue;
+      try {
+        if (Date.now() - fs.statSync(agent.jsonlFile).mtimeMs <= SESSION_RECENT_ACTIVITY_MS)
+          continue;
+      } catch {
+        /* deleted fork transcript */
+      }
+      this.remove(id);
+    }
+  }
+
   dispose(): void {
     for (const id of [...this.subKeys.keys()]) {
       this.remove(id);
@@ -126,6 +197,16 @@ export class SubagentWatch {
   }
 
   private remove(id: number): void {
+    const key = this.subKeys.get(id);
+    if (!key) return;
+    for (const [childId, childKey] of [...this.subKeys]) {
+      if (childKey.originAgentId === id) this.remove(childId);
+    }
+    this.mainStore.broadcast({
+      type: 'subagentClear',
+      id: key.leadId,
+      parentToolId: key.spawnToolUseId,
+    });
     this.fileWatchers.get(id)?.close();
     this.fileWatchers.delete(id);
     const pt = this.pollingTimers.get(id);
@@ -140,8 +221,9 @@ export class SubagentWatch {
 
   /** Re-emit shadow-store activity on the main store as subagent* messages.
    *  Everything not listed here (agentTokenUsage, agentTeamInfo, the shadow's
-   *  own nested subagent* messages) is deliberately dropped: the sub-character
-   *  has no context gauge, no team badge, and no sub-sub-characters.
+   *  own nested subagent* messages) is deliberately dropped: descendants have
+   *  separate watches projected onto the same visible lead. Shadows have no
+   *  context gauge or team badge.
    *
    *  Per-tool dones are DEFERRED to the sub's turn end: emitting them as they
    *  happen made the sub-character flap between typing and idle on every

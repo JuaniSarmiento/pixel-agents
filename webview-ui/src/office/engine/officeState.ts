@@ -748,31 +748,40 @@ export class OfficeState {
     const palette = parentCh ? parentCh.palette : 0;
     const hueShift = parentCh ? parentCh.hueShift : 0;
 
-    // Prefer a free tile inside the parent's own Area (same Area as its seat),
-    // spread across the Area's free tiles rather than always the nearest one
-    // — otherwise sub-agents cluster at the single closest tile, which may
-    // even belong to a neighboring Area. Falls back to the plain closest
-    // free tile when the parent has no seat, the layout has no Areas, or the
-    // parent's Area has no free tile left.
-    const parentCol = parentCh ? parentCh.tileCol : 0;
-    const parentRow = parentCh ? parentCh.tileRow : 0;
-    let spawn = { col: parentCol, row: parentRow };
-    if (this.walkableTiles.length > 0) {
-      const parentArea = parentCh?.seatId ? this.seatZone(parentCh.seatId) : null;
-      const inAreaTiles = parentArea ? this.freeWalkableTilesInArea(parentArea) : [];
-      const inAreaSpawn =
-        inAreaTiles.length > 0 ? inAreaTiles[Math.floor(Math.random() * inAreaTiles.length)] : null;
-      spawn =
-        inAreaSpawn ?? this.closestFreeWalkableTile(parentCol, parentRow) ?? this.walkableTiles[0];
+    // A descendant is flattened onto its visible lead. Reserve only a free
+    // seat in that lead's Area; overflow keeps the existing in-area tile path.
+    const parentArea = parentCh?.seatId ? this.seatZone(parentCh.seatId) : null;
+    const areaSeats = new Map(
+      [...this.seats].filter(
+        ([uid, seat]) => !seat.assigned && parentArea !== null && this.seatZone(uid) === parentArea,
+      ),
+    );
+    const anchor = anchorTile(parentCh, this.seats);
+    const seatId = anchor ? closestFreeSeat(areaSeats, anchor.col, anchor.row) : null;
+    const seat = seatId ? this.seats.get(seatId)! : null;
+    if (seat) seat.assigned = true;
+    const ch = createCharacter(id, palette, seatId, seat, hueShift);
+    if (!seat) {
+      const parentCol = parentCh ? parentCh.tileCol : 0;
+      const parentRow = parentCh ? parentCh.tileRow : 0;
+      let spawn = { col: parentCol, row: parentRow };
+      if (this.walkableTiles.length > 0) {
+        const inAreaTiles = parentArea ? this.freeWalkableTilesInArea(parentArea) : [];
+        const inAreaSpawn =
+          inAreaTiles.length > 0
+            ? inAreaTiles[Math.floor(Math.random() * inAreaTiles.length)]
+            : null;
+        spawn =
+          inAreaSpawn ??
+          this.closestFreeWalkableTile(parentCol, parentRow) ??
+          this.walkableTiles[0];
+      }
+      ch.x = spawn.col * TILE_SIZE + TILE_SIZE / 2;
+      ch.y = spawn.row * TILE_SIZE + TILE_SIZE / 2;
+      ch.tileCol = spawn.col;
+      ch.tileRow = spawn.row;
+      if (parentCh) ch.dir = parentCh.dir;
     }
-
-    const ch = createCharacter(id, palette, null, null, hueShift);
-    ch.x = spawn.col * TILE_SIZE + TILE_SIZE / 2;
-    ch.y = spawn.row * TILE_SIZE + TILE_SIZE / 2;
-    ch.tileCol = spawn.col;
-    ch.tileRow = spawn.row;
-    // Face the same direction as the parent agent
-    if (parentCh) ch.dir = parentCh.dir;
     ch.isSubagent = true;
     ch.parentAgentId = parentAgentId;
     startMatrixEffect(ch, 'spawn');

@@ -38,7 +38,7 @@ A character drawn translucent because its agent is headless — the visual short
 _Avoid_: faded, dimmed, transparent, inactive (that's a status)
 
 **Sub-agent**:
-An unnamed piece of delegated work spawned by an agent, visualized with its own character near its parent — around it, not in a seat. Not an Agent (no session of its own) and not a Teammate (no name). It exists only for the duration of its task, which may outlive the parent's turn. Having no name is what makes it a sub-agent.
+An unnamed piece of delegated work spawned by an agent, visualized with its own character in a free seat in its visible lead's Area, falling back to a free tile in that Area when its seats are occupied. Nested sub-agents and forks appear alongside that visible lead; sidecar labels do not promote nested shadow watches into teammates. Not an Agent (no session of its own) and not a Teammate (no name). It exists only for the duration of its task, which may outlive the parent's turn. Having no name is what makes it a sub-agent.
 _Avoid_: subtask (UI label prefix only)
 
 **Team**:

@@ -87,6 +87,31 @@ describe('claudeTeamProvider', () => {
       }
     });
 
+    it('preserves parentAgentId on nested sidecars and parent-only forks', () => {
+      const sessDir = path.join(tmpRoot, 'sess-1', 'subagents');
+      fsMod.mkdirSync(sessDir, { recursive: true });
+      for (const [id, meta] of [
+        [
+          'nested',
+          { agentType: 'general-purpose', toolUseId: 'toolu-child', parentAgentId: 'parent' },
+        ],
+        ['fork', { parentAgentId: 'nested' }],
+      ] as const) {
+        const file = path.join(sessDir, `agent-${id}.jsonl`);
+        fsMod.writeFileSync(file, '');
+        fsMod.writeFileSync(file.replace('.jsonl', '.meta.json'), JSON.stringify(meta));
+      }
+      const discovered = claudeTeamProvider.discoverTeammates(tmpRoot, 'sess-1');
+      expect(discovered).toHaveLength(2);
+      expect(discovered.find((e) => e.jsonlPath.endsWith('agent-nested.jsonl'))).toMatchObject({
+        parentAgentId: 'parent',
+        toolUseId: 'toolu-child',
+      });
+      expect(discovered.find((e) => e.jsonlPath.endsWith('agent-fork.jsonl'))).toMatchObject({
+        parentAgentId: 'nested',
+      });
+    });
+
     it('returns empty array when teammate directory does not exist', () => {
       const result = claudeTeamProvider.discoverTeammates(tmpRoot, 'nonexistent-sess');
       expect(result).toEqual([]);

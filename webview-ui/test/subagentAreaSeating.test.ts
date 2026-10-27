@@ -124,3 +124,73 @@ test('falls back to the closest free tile when the parent has no seat (no Area t
   const dist = Math.abs(sub.tileCol - parent.tileCol) + Math.abs(sub.tileRow - parent.tileRow);
   assert.equal(dist, 1, 'still the closest free tile to the parent, one step away');
 });
+
+test('flattened descendants reserve distinct free seats in the visible lead Area and sit there', () => {
+  const layout = splitAreaLayout();
+  const os = new OfficeState(layout);
+  os.seats.set('lead', seatAt('lead', 3, 3));
+  os.seats.set('left-a', seatAt('left-a', 0, 1));
+  os.seats.set('left-b', seatAt('left-b', 1, 1));
+  os.seats.set('near-right', seatAt('near-right', 4, 3));
+  os.addAgent(1, 0, 0, 'lead');
+  const first = os.addSubagent(1, 'subagent:1000001');
+  const second = os.addSubagent(1, 'subagent:1000002');
+  const one = os.characters.get(first)!;
+  const two = os.characters.get(second)!;
+  assert.ok(one.seatId, 'first descendant must own a seat');
+  assert.ok(two.seatId, 'second descendant must own a seat');
+  assert.notEqual(one.seatId, two.seatId);
+  assert.equal(os.seatZone(one.seatId), 'left');
+  assert.equal(os.seatZone(two.seatId), 'left');
+  assert.equal(os.seats.get(one.seatId)!.assigned, true);
+  assert.equal(os.seats.get(two.seatId)!.assigned, true);
+  assert.equal(os.seats.get('near-right')!.assigned, false);
+  for (let frame = 0; frame < 30; frame++) os.update(0.1);
+  for (const ch of [one, two]) {
+    const seat = os.seats.get(ch.seatId!)!;
+    assert.deepEqual([ch.tileCol, ch.tileRow], [seat.seatCol, seat.seatRow]);
+    assert.equal(ch.parentAgentId, 1);
+    assert.equal(ch.state, 'type');
+  }
+  assert.deepEqual(
+    Object.keys(os.getPersistableSeats()),
+    ['1'],
+    'sub-agent seat reservations must remain transient',
+  );
+});
+
+test('a full parent Area uses an in-area tile instead of borrowing another Area seat', () => {
+  const layout = splitAreaLayout();
+  const os = new OfficeState(layout);
+  os.seats.set('lead', seatAt('lead', 3, 3));
+  os.seats.set('only-left', seatAt('only-left', 1, 1));
+  os.seats.set('right', seatAt('right', 4, 3));
+  os.addAgent(1, 0, 0, 'lead');
+  const seated = os.characters.get(os.addSubagent(1, 'nested-one'))!;
+  const overflow = os.characters.get(os.addSubagent(1, 'nested-two'))!;
+  assert.equal(seated.seatId, 'only-left');
+  assert.equal(overflow.seatId, null);
+  assert.equal(areaLabelAt(layout, overflow.tileCol, overflow.tileRow), 'left');
+  assert.equal(os.seats.get('right')!.assigned, false);
+});
+
+test('completion releases reserved sub-agent seats and lead removal releases the remaining ones', () => {
+  const os = new OfficeState(splitAreaLayout());
+  os.seats.set('lead', seatAt('lead', 3, 3));
+  os.seats.set('left-a', seatAt('left-a', 0, 1));
+  os.seats.set('left-b', seatAt('left-b', 1, 1));
+  os.addAgent(1, 0, 0, 'lead');
+  const first = os.addSubagent(1, 'nested-one');
+  os.addSubagent(1, 'nested-two');
+  const freed = os.characters.get(first)!.seatId;
+  assert.ok(freed);
+  os.removeSubagent(1, 'nested-one');
+  assert.equal(os.seats.get(freed)!.assigned, false);
+  const replacement = os.addSubagent(1, 'nested-three');
+  assert.equal(os.characters.get(replacement)!.seatId, freed);
+  os.removeAllSubagents(1);
+  assert.equal(os.seats.get('left-a')!.assigned, false);
+  assert.equal(os.seats.get('left-b')!.assigned, false);
+  assert.equal(os.seats.get('lead')!.assigned, true);
+  assert.equal(os.subagentMeta.size, 0);
+});

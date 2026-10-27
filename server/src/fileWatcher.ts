@@ -639,7 +639,14 @@ export function scanForTeammateFiles(
   const teammates = teamProvider.discoverTeammates(projectDir, sessionId, parentAgent?.teamName);
 
   const parentLiveSpawnIds = parentAgent ? liveSpawnToolIds(parentAgent) : null;
-  for (const { jsonlPath: file, teammateName, sessionId: ownSessionId, toolUseId } of teammates) {
+  for (const {
+    jsonlPath: file,
+    teammateName,
+    sessionId: ownSessionId,
+    toolUseId,
+    parentAgentId: parentCliId,
+  } of teammates) {
+    if (parentCliId !== undefined) continue; // nested sidecars/forks belong to the shadow flow
     // Live-spawn sidecars (they carry the lead's spawn toolUseId) belong to
     // scanForBackgroundAgentFiles, which classifies them by name: named
     // background -> teammate, everything else -> watched sub-agent. Adopting
@@ -783,7 +790,8 @@ function liveSpawnToolIds(lead: AgentState): Set<string> {
  * carrying agentType/description/toolUseId (+ `name` when the spawn was
  * named) — but NO team registry anywhere, so the teammate flow never engages
  * on its own. Per the domain model (CONTEXT.md) the name is the sole
- * classifier:
+ * classifier for direct spawns from visible agents. Nested shadow spawns
+ * and forks remain sub-agents of their visible lead:
  *
  * - NAMED spawn → Teammate: its own seated character, named from the sidecar
  *   `name`; the spawner becomes its Lead (derived team — no teamName is set,
@@ -809,14 +817,38 @@ export function scanForBackgroundAgentFiles(
   onAgentCreated?: (agent: AgentState) => void,
 ): void {
   if (!teamProvider) return;
-  const lead = agents.get(leadId);
-  if (!lead || !lead.sessionId || !lead.projectDir) return;
-  const liveSpawnIds = liveSpawnToolIds(lead);
-  if (liveSpawnIds.size === 0) return;
+  const source = agents.get(leadId) ?? subagentWatch?.store.get(leadId);
+  const visibleLeadId = subagentWatch?.visibleLeadId(leadId) ?? leadId;
+  const lead = agents.get(visibleLeadId);
+  if (!source || !lead || !source.sessionId || !source.projectDir) return;
+  const liveSpawnIds = liveSpawnToolIds(source);
 
-  const entries = teamProvider.discoverTeammates(lead.projectDir, lead.sessionId);
+  const entries = teamProvider.discoverTeammates(source.projectDir, source.sessionId);
   for (const entry of entries) {
-    if (!entry.toolUseId || !liveSpawnIds.has(entry.toolUseId)) continue;
+    const parentMatches =
+      entry.parentAgentId !== undefined &&
+      (subagentWatch?.matchesParent(source, entry.parentAgentId) ?? false);
+    if (entry.parentAgentId !== undefined && !parentMatches) continue;
+    const isFork = !entry.toolUseId && parentMatches;
+    if (!isFork && (!entry.toolUseId || !liveSpawnIds.has(entry.toolUseId))) continue;
+    if (!entry.parentAgentId && entry.toolUseId) {
+      // Without provenance a reused tool id cannot tell sibling origins apart.
+      const owners = [...agents.values(), ...(subagentWatch?.store.values() ?? [])].filter(
+        (a) =>
+          pathsMatch(a.projectDir, source.projectDir) &&
+          a.sessionId === source.sessionId &&
+          liveSpawnToolIds(a).has(entry.toolUseId!),
+      );
+      if (owners.length > 1) continue;
+    }
+    if (isFork) {
+      try {
+        if (Date.now() - fs.statSync(entry.jsonlPath).mtimeMs > SESSION_RECENT_ACTIVITY_MS)
+          continue;
+      } catch {
+        continue;
+      }
+    }
 
     let alreadyTracked = subagentWatch?.isWatching(entry.jsonlPath) ?? false;
     if (!alreadyTracked) {
@@ -829,18 +861,17 @@ export function scanForBackgroundAgentFiles(
     }
     if (alreadyTracked) continue;
 
-    // Foreground spawns (Agent run_in_background:false — the tool stays open
-    // for the whole run) write the same sidecar shape. They are within-turn
-    // work whatever the sidecar says: watch them, never seat them.
-    const isForeground = !lead.backgroundAgentToolIds.has(entry.toolUseId);
+    // Nested spawns/forks stay sub-agents of the visible lead even if their
+    // sidecar has a name. Only the source transcript owns their live spawn ids.
+    const toolUseId = entry.toolUseId ?? `fork:${path.basename(entry.jsonlPath)}`;
+    const isForeground = !source.backgroundAgentToolIds.has(toolUseId);
 
-    if (!entry.name || isForeground) {
-      // Unnamed spawn = Sub-agent: keep the Subtask character, watch the
-      // transcript in the shadow store for live activity. No agentCreated, no
-      // subagentClear, no persistence.
-      subagentWatch?.watch(lead, leadId, {
+    if (!entry.name || isForeground || source !== lead || isFork) {
+      subagentWatch?.watch(lead, visibleLeadId, {
         jsonlPath: entry.jsonlPath,
-        toolUseId: entry.toolUseId,
+        toolUseId,
+        originAgentId: leadId,
+        isFork,
       });
       continue;
     }
@@ -949,8 +980,8 @@ export function scanTeamConfigsForRemovals(agents: AgentStateStore): number[] {
 }
 
 /**
- * Scan all tracked project dirs for teammate JSONL files.
- * Called periodically as a fallback when hooks are disabled.
+ * Retry background/fork discovery for main and shadow sources, then real team
+ * discovery for visible team leads. The project timer runs this in both modes.
  */
 export function scanAllTeammateFiles(
   nextAgentIdRef: { current: number },
@@ -963,14 +994,11 @@ export function scanAllTeammateFiles(
   persistAgents: () => void,
   onAgentCreated?: (agent: AgentState) => void,
 ): void {
-  // For each known lead agent, ask the provider to scan for teammate transcripts.
-  // CRITICAL: only scan agents that JSONL has confirmed as team leads (teamName set).
-  // Without this gate we'd pick up basic subagents' JSONL files (which some CLIs also
-  // write to the same teammate directory) and create spurious teammate characters for
-  // them when the Agent Teams feature is OFF.
-  for (const [agentId, agent] of agents) {
-    // Only scan for lead agents (not teammates themselves)
-    if (agent.leadAgentId !== undefined) continue;
+  // All sources may spawn nested work. Only the later teammate-discovery path
+  // requires a main-store team lead; sidecars/forks remain shadow-watched.
+  subagentWatch?.pruneInactiveForks();
+  const sources = [...agents, ...(subagentWatch?.store ?? [])];
+  for (const [agentId, agent] of sources) {
     if (!agent.sessionId || !agent.projectDir) continue;
     // Anonymous background agents (teams OFF): adopt sidecar transcripts for the
     // lead's live background spawns. Gated by toolUseId matching, not teamName;
@@ -986,8 +1014,8 @@ export function scanAllTeammateFiles(
       persistAgents,
       onAgentCreated,
     );
-    // Gate: basic-mode agents never get teamName set. Real team leads do, via JSONL.
-    if (!agent.teamName) continue;
+    // Only main-store team leads use teammate discovery. Shadows retain their isolation.
+    if (!agents.has(agentId) || agent.leadAgentId !== undefined || !agent.teamName) continue;
 
     scanForTeammateFiles(
       agent.projectDir,
