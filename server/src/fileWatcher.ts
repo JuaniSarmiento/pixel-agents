@@ -1396,7 +1396,7 @@ function directoryNameFromProjectDir(dirName: string): string {
 
 /** Scan every session root the active provider exposes for active sessions
  *  (global discovery — powers the "Watch All Sessions" toggle). */
-function scanGlobalProjectDirs(
+export function scanGlobalProjectDirs(
   knownJsonlFiles: Set<string>,
   nextAgentIdRef: { current: number },
   agents: AgentStateStore,
