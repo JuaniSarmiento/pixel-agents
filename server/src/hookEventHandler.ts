@@ -733,6 +733,7 @@ export class HookEventHandler {
       agent.activeToolStatuses.delete(toolId);
       const toolName = agent.activeToolNames.get(toolId);
       agent.activeToolNames.delete(toolId);
+      agent.activeToolRoles?.delete(toolId);
       if (toolName && parentTools.has(toolName)) {
         agent.activeSubagentToolIds.delete(toolId);
         agent.activeSubagentToolNames.delete(toolId);
@@ -759,6 +760,7 @@ export class HookEventHandler {
           toolName: agent.activeToolNames.get(toolId),
           runInBackground: true,
           isTeammateSpawn: agent.teammateSpawnToolIds?.has(toolId) || undefined,
+          role: agent.activeToolRoles?.get(toolId),
         });
       }
     }

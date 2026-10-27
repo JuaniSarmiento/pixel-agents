@@ -1,4 +1,5 @@
 import { pickDiversePalette } from '../../../../core/src/paletteUtils.js';
+import { getRoleVisual } from '../../../../core/src/roles.js';
 import {
   AUTO_ON_FACING_DEPTH,
   AUTO_ON_SIDE_DEPTH,
@@ -739,14 +740,18 @@ export class OfficeState {
   }
 
   /** Create a sub-agent character with the parent's palette. Returns the sub-agent ID. */
-  addSubagent(parentAgentId: number, parentToolId: string): number {
+  addSubagent(parentAgentId: number, parentToolId: string, role?: string): number {
     const key = `${parentAgentId}:${parentToolId}`;
     if (this.subagentIdMap.has(key)) return this.subagentIdMap.get(key)!;
 
     const id = this.nextSubagentId--;
     const parentCh = this.characters.get(parentAgentId);
     const palette = parentCh ? parentCh.palette : 0;
-    const hueShift = parentCh ? parentCh.hueShift : 0;
+    // A detected role (DBA, QA, Auditor...) wears a FIXED hue, same every time,
+    // instead of inheriting the parent's -- so the same role always looks the
+    // same regardless of which agent spawned it.
+    const roleVisual = getRoleVisual(role);
+    const hueShift = roleVisual ? roleVisual.hueShift : parentCh ? parentCh.hueShift : 0;
 
     // A descendant is flattened onto its visible lead. Reserve only a free
     // seat in that lead's Area; overflow keeps the existing in-area tile path.
@@ -784,6 +789,7 @@ export class OfficeState {
     }
     ch.isSubagent = true;
     ch.parentAgentId = parentAgentId;
+    if (roleVisual) ch.role = role;
     startMatrixEffect(ch, 'spawn');
     this.characters.set(id, ch);
 

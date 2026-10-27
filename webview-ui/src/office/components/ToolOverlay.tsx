@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
 
+import { getRoleVisual } from '../../../../core/src/roles.js';
 import { Button } from '../../components/ui/Button.js';
 import {
   BUBBLE_FADE_DURATION_SEC,
@@ -19,6 +20,7 @@ import {
   OVERLAY_BUBBLE_Z_INDEX,
   OVERLAY_LABEL_SELECTED_Z_INDEX,
   OVERLAY_LABEL_Z_INDEX,
+  SUBAGENT_ROLE_LABEL_COLOR,
   TEAM_LEAD_COLOR,
   TEAM_ROLE_COLOR,
   TOOL_OVERLAY_VERTICAL_OFFSET,
@@ -275,7 +277,21 @@ export function ToolOverlay({
 
         // Team info
         const teamRoleLabel = ch.isTeamLead ? 'LEAD' : ch.agentName || null;
-        const hasExtraLines = !!(ch.directoryName || teamRoleLabel);
+
+        // Detected role (DBA, QA, Auditor...) on a sub-agent: a short tag in
+        // its own fixed color, same spot a team's role label would use --
+        // a sub-agent is never also a team lead/teammate, so the two never
+        // compete for that line. The role's real color identity is the
+        // character's fixed hueShift (see core/src/roles.ts); this label just
+        // marks the line as a role, same idea as TEAM_ROLE_COLOR for teams.
+        const roleVisual = isSub ? getRoleVisual(ch.role) : undefined;
+        const topLabel = teamRoleLabel || roleVisual?.label || null;
+        const topLabelColor = teamRoleLabel
+          ? ch.isTeamLead
+            ? TEAM_LEAD_COLOR
+            : TEAM_ROLE_COLOR
+          : SUBAGENT_ROLE_LABEL_COLOR;
+        const hasExtraLines = !!(ch.directoryName || topLabel);
 
         // Context gauge. Every agent gets one — lead, teammate, adopted,
         // headless — as soon as it has taken a turn. Sub-agents never do: they
@@ -306,16 +322,16 @@ export function ToolOverlay({
                   />
                 )}
                 <div className="flex flex-col gap-0 overflow-hidden">
-                  {teamRoleLabel && (
+                  {topLabel && (
                     <span
                       className="overflow-hidden text-ellipsis block leading-none"
                       style={{
                         fontSize: '18px',
-                        color: ch.isTeamLead ? TEAM_LEAD_COLOR : TEAM_ROLE_COLOR,
+                        color: topLabelColor,
                         fontWeight: ch.isTeamLead ? 'bold' : undefined,
                       }}
                     >
-                      {teamRoleLabel}
+                      {topLabel}
                     </span>
                   )}
                   <span

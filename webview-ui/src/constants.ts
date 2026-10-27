@@ -284,6 +284,12 @@ export const CONTEXT_GAUGE_BG = '#222';
 export const TEAM_LEAD_COLOR = '#ffd700';
 export const TEAM_ROLE_COLOR = '#66aaff';
 
+/** Detected sub-agent role tag (DBA, QA, Auditor...) in the cartel — see
+ *  core/src/roles.ts. The role's real color identity lives on the character's
+ *  sprite (fixed hueShift); this just marks the label as "a role", distinct
+ *  from a team's agentName label (TEAM_ROLE_COLOR). */
+export const SUBAGENT_ROLE_LABEL_COLOR = '#ff9d5c';
+
 // ── Pets ────────────────────────────────────────────────────────
 /** Walking speed in world pixels per second (matches character walk speed visually but slower). */
 export const PET_WALK_SPEED_PX_PER_SEC = 32;
