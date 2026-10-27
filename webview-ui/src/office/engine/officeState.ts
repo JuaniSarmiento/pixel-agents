@@ -403,6 +403,22 @@ export class OfficeState {
     return this.pickFromSeats(freeSeats, electronicsTiles);
   }
 
+  /** Free (unoccupied) walkable tiles carrying the given Area label, in no
+   *  particular order. Empty when the layout has no Areas or none are free. */
+  private freeWalkableTilesInArea(areaLabel: string): Array<{ col: number; row: number }> {
+    const tiles = this.layout.areaTiles;
+    if (!tiles || tiles.length === 0) return [];
+    const occupied = new Set<string>();
+    for (const ch of this.characters.values()) {
+      occupied.add(`${ch.tileCol},${ch.tileRow}`);
+    }
+    return this.walkableTiles.filter((tile) => {
+      if (occupied.has(`${tile.col},${tile.row}`)) return false;
+      const idx = tile.row * this.layout.cols + tile.col;
+      return tiles[idx] === areaLabel;
+    });
+  }
+
   /** Closest walkable tile to (col,row) not occupied by another character, or null. */
   private closestFreeWalkableTile(col: number, row: number): { col: number; row: number } | null {
     const occupied = new Set<string>();
@@ -732,12 +748,22 @@ export class OfficeState {
     const palette = parentCh ? parentCh.palette : 0;
     const hueShift = parentCh ? parentCh.hueShift : 0;
 
-    // Find the closest walkable tile to the parent, avoiding tiles occupied by other characters
+    // Prefer a free tile inside the parent's own Area (same Area as its seat),
+    // spread across the Area's free tiles rather than always the nearest one
+    // — otherwise sub-agents cluster at the single closest tile, which may
+    // even belong to a neighboring Area. Falls back to the plain closest
+    // free tile when the parent has no seat, the layout has no Areas, or the
+    // parent's Area has no free tile left.
     const parentCol = parentCh ? parentCh.tileCol : 0;
     const parentRow = parentCh ? parentCh.tileRow : 0;
     let spawn = { col: parentCol, row: parentRow };
     if (this.walkableTiles.length > 0) {
-      spawn = this.closestFreeWalkableTile(parentCol, parentRow) ?? this.walkableTiles[0];
+      const parentArea = parentCh?.seatId ? this.seatZone(parentCh.seatId) : null;
+      const inAreaTiles = parentArea ? this.freeWalkableTilesInArea(parentArea) : [];
+      const inAreaSpawn =
+        inAreaTiles.length > 0 ? inAreaTiles[Math.floor(Math.random() * inAreaTiles.length)] : null;
+      spawn =
+        inAreaSpawn ?? this.closestFreeWalkableTile(parentCol, parentRow) ?? this.walkableTiles[0];
     }
 
     const ch = createCharacter(id, palette, null, null, hueShift);
