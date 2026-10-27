@@ -1,4 +1,5 @@
 import { pickDiversePalette } from '../../../../core/src/paletteUtils.js';
+import { getRoleVisual } from '../../../../core/src/roles.js';
 import {
   AUTO_ON_FACING_DEPTH,
   AUTO_ON_SIDE_DEPTH,
@@ -739,14 +740,18 @@ export class OfficeState {
   }
 
   /** Create a sub-agent character with the parent's palette. Returns the sub-agent ID. */
-  addSubagent(parentAgentId: number, parentToolId: string): number {
+  addSubagent(parentAgentId: number, parentToolId: string, role?: string): number {
     const key = `${parentAgentId}:${parentToolId}`;
     if (this.subagentIdMap.has(key)) return this.subagentIdMap.get(key)!;
 
     const id = this.nextSubagentId--;
     const parentCh = this.characters.get(parentAgentId);
     const palette = parentCh ? parentCh.palette : 0;
-    const hueShift = parentCh ? parentCh.hueShift : 0;
+    // A detected role (DBA, QA, Auditor...) wears a FIXED hue, same every time,
+    // instead of inheriting the parent's -- so the same role always looks the
+    // same regardless of which agent spawned it.
+    const roleVisual = getRoleVisual(role);
+    const hueShift = roleVisual ? roleVisual.hueShift : parentCh ? parentCh.hueShift : 0;
 
     // A descendant is flattened onto its visible lead. Reserve only a free
     // seat in that lead's Area; overflow keeps the existing in-area tile path.
@@ -784,6 +789,7 @@ export class OfficeState {
     }
     ch.isSubagent = true;
     ch.parentAgentId = parentAgentId;
+    if (roleVisual) ch.role = role;
     startMatrixEffect(ch, 'spawn');
     this.characters.set(id, ch);
 
@@ -863,6 +869,15 @@ export class OfficeState {
     const ch = this.characters.get(id);
     if (ch) {
       ch.isActive = active;
+      if (active && ch.bubbleType === 'waiting') {
+        // The session just moved again -- the "waiting for you" indicator
+        // (persistent while waitingAwaitingInput, or mid-fade otherwise) has
+        // done its job. Clear it directly rather than waiting on the tick
+        // timer, which never counts down the persistent case on its own.
+        ch.bubbleType = null;
+        ch.bubbleTimer = 0;
+        ch.waitingAwaitingInput = false;
+      }
       if (!active) {
         // Sentinel -1: signals turn just ended, skip next seat rest timer.
         // Prevents the WALK handler from setting a 2-4 min rest on arrival.
@@ -982,8 +997,16 @@ export class OfficeState {
       ch.bubbleType = null;
       ch.bubbleTimer = 0;
     } else if (ch.bubbleType === 'waiting') {
-      // Trigger immediate fade (0.3s remaining)
-      ch.bubbleTimer = Math.min(ch.bubbleTimer, DISMISS_BUBBLE_FAST_FADE_SEC);
+      if (ch.waitingAwaitingInput) {
+        // Persistent "waiting for you" bubble doesn't fade on its own -- a
+        // click acknowledges it immediately instead.
+        ch.bubbleType = null;
+        ch.bubbleTimer = 0;
+        ch.waitingAwaitingInput = false;
+      } else {
+        // Trigger immediate fade (0.3s remaining)
+        ch.bubbleTimer = Math.min(ch.bubbleTimer, DISMISS_BUBBLE_FAST_FADE_SEC);
+      }
     }
   }
 
@@ -1193,8 +1216,12 @@ export class OfficeState {
         ),
       );
 
-      // Tick bubble timer for waiting bubbles
-      if (ch.bubbleType === 'waiting') {
+      // Tick bubble timer for waiting bubbles. The "awaiting input" case is
+      // exempt: it must stay up -- visibly, persistently -- until the agent
+      // actually moves again (next tool use / turn clears bubbleType
+      // elsewhere), not fade out after a few seconds like the plain "done"
+      // checkmark. A click can still dismiss it early (see dismissBubble).
+      if (ch.bubbleType === 'waiting' && !ch.waitingAwaitingInput) {
         ch.bubbleTimer -= dt;
         if (ch.bubbleTimer <= 0) {
           ch.bubbleType = null;

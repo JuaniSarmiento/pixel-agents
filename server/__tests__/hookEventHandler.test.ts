@@ -1,10 +1,14 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AgentStateStore } from '../src/agentStateStore.js';
 import { HookEventHandler } from '../src/hookEventHandler.js';
 import { claudeProvider } from '../src/providers/hook/claude/claude.js';
 import { SessionRouter } from '../src/sessionRouter.js';
 import type { AgentState } from '../src/types.js';
+import { resetWaitingLogPath, setWaitingLogPath } from '../src/waitingLog.js';
 
 /** Minimal AgentState for testing. */
 function createTestAgent(overrides: Partial<AgentState> = {}): AgentState {
@@ -856,5 +860,102 @@ describe('HookEventHandler', () => {
         }
       }
     });
+  });
+});
+
+describe('HookEventHandler: waiting-for-human JSONL log', () => {
+  let agents: AgentStateStore;
+  let waitingTimers: Map<number, ReturnType<typeof setTimeout>>;
+  let permissionTimers: Map<number, ReturnType<typeof setTimeout>>;
+  let handler: HookEventHandler;
+  let logPath: string;
+
+  beforeEach(() => {
+    agents = new AgentStateStore();
+    waitingTimers = new Map();
+    permissionTimers = new Map();
+    handler = new HookEventHandler(
+      agents,
+      waitingTimers,
+      permissionTimers,
+      claudeProvider,
+      new SessionRouter(),
+    );
+    logPath = path.join(
+      os.tmpdir(),
+      `pixel-agents-esperando-${process.pid}-${Math.random().toString(36).slice(2)}.jsonl`,
+    );
+    setWaitingLogPath(logPath);
+  });
+
+  afterEach(() => {
+    resetWaitingLogPath();
+    try {
+      fs.unlinkSync(logPath);
+    } catch {
+      /* file may not have been created */
+    }
+  });
+
+  function readLoggedEvents(): Array<Record<string, unknown>> {
+    let raw: string;
+    try {
+      raw = fs.readFileSync(logPath, 'utf-8');
+    } catch {
+      return [];
+    }
+    return raw
+      .split('\n')
+      .filter((line) => line.trim())
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+  }
+
+  it('logs a permission request as motivo "permission"', () => {
+    const agent = createTestAgent({ id: 1, sessionId: 'sess-1', directoryName: 'my-project' });
+    agents.set(1, agent);
+    handler.registerAgent('sess-1', 1);
+
+    handler.handleEvent('claude', {
+      hook_event_name: 'PermissionRequest',
+      session_id: 'sess-1',
+    });
+
+    const events = readLoggedEvents();
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      sessionId: 'sess-1',
+      directoryName: 'my-project',
+      motivo: 'permission',
+    });
+    expect(typeof events[0].ts).toBe('string');
+  });
+
+  it('logs an idle_prompt turn end as motivo "awaitingInput"', () => {
+    const agent = createTestAgent({ id: 1, sessionId: 'sess-1' });
+    agents.set(1, agent);
+    handler.registerAgent('sess-1', 1);
+
+    handler.handleEvent('claude', {
+      hook_event_name: 'Notification',
+      session_id: 'sess-1',
+      notification_type: 'idle_prompt',
+    });
+
+    const events = readLoggedEvents();
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ sessionId: 'sess-1', motivo: 'awaitingInput' });
+  });
+
+  it('does not log a plain finished turn (Stop without awaitingInput)', () => {
+    const agent = createTestAgent({ id: 1, sessionId: 'sess-1' });
+    agents.set(1, agent);
+    handler.registerAgent('sess-1', 1);
+
+    handler.handleEvent('claude', {
+      hook_event_name: 'Stop',
+      session_id: 'sess-1',
+    });
+
+    expect(readLoggedEvents()).toHaveLength(0);
   });
 });

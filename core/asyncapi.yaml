@@ -308,6 +308,13 @@ components:
             True when this spawn tool call carries a name, making the spawn a
             Teammate-to-be. The office must not create a Subtask sub-character
             for it — a teammate character will represent the spawn instead.
+        role:
+          type: string
+          description: >-
+            Detected role key (e.g. "dba", "qa", "auditor") for a Task/Agent
+            spawn, from the tool call's subagent_type or description keywords.
+            Set only for subagent-spawning tool calls; undefined otherwise.
+            Drives the sub-agent character's fixed visual identity.
 
     AgentToolDone:
       description: Agent finished executing a tool.

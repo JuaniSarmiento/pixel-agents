@@ -349,3 +349,112 @@ describe('transcriptParser: teammate spawn results (new-harness implicit teams)'
     expect(agent.isTeamLead).toBeUndefined();
   });
 });
+
+describe('transcriptParser: sub-agent role detection', () => {
+  let agents: AgentStateStore;
+  let agent: AgentState;
+  let messages: Array<Record<string, unknown>>;
+  const waitingTimers = new Map<number, ReturnType<typeof setTimeout>>();
+  const permissionTimers = new Map<number, ReturnType<typeof setTimeout>>();
+
+  beforeEach(() => {
+    setHookProvider(claudeProvider);
+    agents = new AgentStateStore();
+    agent = createTestAgent();
+    agents.set(1, agent);
+    messages = [];
+    agents.on('broadcast', (msg) => {
+      messages.push(msg as Record<string, unknown>);
+    });
+  });
+
+  it('tags a basic subagent spawn with the role detected from subagent_type', () => {
+    processTranscriptLine(
+      1,
+      agentToolUseRecord('toolu_1', 'Task', {
+        description: 'Review the schema change',
+        subagent_type: 'role-dba',
+      }),
+      agents,
+      waitingTimers,
+      permissionTimers,
+    );
+
+    const start = messages.find((m) => m.type === 'agentToolStart' && m.toolId === 'toolu_1');
+    expect(start).toMatchObject({ role: 'dba' });
+    expect(agent.activeToolRoles?.get('toolu_1')).toBe('dba');
+  });
+
+  it('falls back to a description keyword when subagent_type is generic', () => {
+    processTranscriptLine(
+      1,
+      agentToolUseRecord('toolu_1', 'Task', {
+        description: 'Rompedor pass: look for race conditions',
+        subagent_type: 'general-purpose',
+      }),
+      agents,
+      waitingTimers,
+      permissionTimers,
+    );
+
+    const start = messages.find((m) => m.type === 'agentToolStart' && m.toolId === 'toolu_1');
+    expect(start).toMatchObject({ role: 'breaker' });
+  });
+
+  it('carries no role when neither subagent_type nor description match a role', () => {
+    processTranscriptLine(
+      1,
+      agentToolUseRecord('toolu_1', 'Task', {
+        description: 'Summarize the changelog',
+        subagent_type: 'general-purpose',
+      }),
+      agents,
+      waitingTimers,
+      permissionTimers,
+    );
+
+    const start = messages.find((m) => m.type === 'agentToolStart' && m.toolId === 'toolu_1');
+    expect(start?.role).toBeUndefined();
+    expect(agent.activeToolRoles?.has('toolu_1')).not.toBe(true);
+  });
+
+  it('does not tag a named (teammate-to-be) spawn with a role', () => {
+    processTranscriptLine(
+      1,
+      agentToolUseRecord('toolu_1', 'Agent', {
+        description: 'DBA review',
+        subagent_type: 'role-dba',
+        name: 'dba-teammate',
+      }),
+      agents,
+      waitingTimers,
+      permissionTimers,
+    );
+
+    const start = messages.find((m) => m.type === 'agentToolStart' && m.toolId === 'toolu_1');
+    expect(start).toMatchObject({ isTeammateSpawn: true, role: undefined });
+  });
+
+  it('clears the tracked role once the spawn tool completes', () => {
+    processTranscriptLine(
+      1,
+      agentToolUseRecord('toolu_1', 'Task', {
+        description: 'QA pass',
+        subagent_type: 'role-qa',
+      }),
+      agents,
+      waitingTimers,
+      permissionTimers,
+    );
+    expect(agent.activeToolRoles?.get('toolu_1')).toBe('qa');
+
+    processTranscriptLine(
+      1,
+      toolResultRecord('toolu_1', 'done'),
+      agents,
+      waitingTimers,
+      permissionTimers,
+    );
+    expect(agent.activeToolRoles?.has('toolu_1')).toBe(false);
+  });
+});

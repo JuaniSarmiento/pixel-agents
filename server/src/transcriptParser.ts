@@ -1,6 +1,7 @@
 const debug = process.env.PIXEL_AGENTS_DEBUG !== '0';
 
 import type { HookProvider } from '../../core/src/provider.js';
+import { detectRole } from '../../core/src/roles.js';
 import type { AgentStateStore } from './agentStateStore.js';
 import { TEXT_IDLE_DELAY_MS, TOOL_DONE_DELAY_MS } from './constants.js';
 import { updateContextUsage } from './contextUsage.js';
@@ -258,6 +259,25 @@ export function processTranscriptLine(
             if (isTeammateSpawn) {
               (agent.teammateSpawnToolIds ??= new Set()).add(block.id);
             }
+            // Role detection: only for basic (non-teammate) subagent spawns --
+            // teammates get their own agentName/team-color identity instead.
+            // Prefers subagent_type, falls back to description keywords (see
+            // core/src/roles.ts). Tracked in activeToolRoles so the
+            // background-launch and turn-end re-broadcasts below can carry it.
+            const role =
+              isSubagentSpawn && !isTeammateSpawn
+                ? (detectRole(
+                    typeof block.input?.subagent_type === 'string'
+                      ? block.input.subagent_type
+                      : undefined,
+                    typeof block.input?.description === 'string'
+                      ? block.input.description
+                      : undefined,
+                  ) ?? undefined)
+                : undefined;
+            if (role) {
+              (agent.activeToolRoles ??= new Map()).set(block.id, role);
+            }
             const useJsonlToolEvents = agent.hookDelivered && hasInlineTeammates(agentId, agents);
             if (!agent.hookDelivered || useJsonlToolEvents || isSubagentSpawn) {
               const runInBackground = isSubagentSpawn && block.input?.run_in_background === true;
@@ -270,6 +290,7 @@ export function processTranscriptLine(
                 permissionActive: agent.permissionSent,
                 runInBackground,
                 isTeammateSpawn: isTeammateSpawn || undefined,
+                role,
               });
             }
           }
@@ -391,6 +412,7 @@ export function processTranscriptLine(
                     toolName: completedToolName,
                     runInBackground: true,
                     isTeammateSpawn: agent.teammateSpawnToolIds?.has(completedToolId) || undefined,
+                    role: agent.activeToolRoles?.get(completedToolId),
                   });
                 }
                 // Classify the spawn right away (sidecar may lag; the periodic
@@ -417,6 +439,7 @@ export function processTranscriptLine(
               agent.activeToolIds.delete(completedToolId);
               agent.activeToolStatuses.delete(completedToolId);
               agent.activeToolNames.delete(completedToolId);
+              agent.activeToolRoles?.delete(completedToolId);
               // Send agentToolDone when hooks are off, or for Task/Agent tools
               // (which always use JSONL path for consistent sub-agent lifecycle).
               const isCompletedAgentTool =
@@ -473,6 +496,7 @@ export function processTranscriptLine(
             agent.activeToolIds.delete(completedToolId);
             agent.activeToolStatuses.delete(completedToolId);
             agent.activeToolNames.delete(completedToolId);
+            agent.activeToolRoles?.delete(completedToolId);
             // Remove the spawn's teammate character or stop its shadow watch.
             backgroundAgentCompletedCallback?.(agentId, completedToolId);
             if (!agent.hookDelivered) {
@@ -504,6 +528,7 @@ export function processTranscriptLine(
           agent.activeToolStatuses.delete(toolId);
           const toolName = agent.activeToolNames.get(toolId);
           agent.activeToolNames.delete(toolId);
+          agent.activeToolRoles?.delete(toolId);
           if (isSubagentTool(toolName)) {
             agent.activeSubagentToolIds.delete(toolId);
             agent.activeSubagentToolNames.delete(toolId);
@@ -532,6 +557,7 @@ export function processTranscriptLine(
               toolName: agent.activeToolNames.get(toolId),
               runInBackground: true,
               isTeammateSpawn: agent.teammateSpawnToolIds?.has(toolId) || undefined,
+              role: agent.activeToolRoles?.get(toolId),
             });
           }
         }
@@ -539,6 +565,7 @@ export function processTranscriptLine(
         agent.activeToolIds.clear();
         agent.activeToolStatuses.clear();
         agent.activeToolNames.clear();
+        agent.activeToolRoles?.clear();
         agent.activeSubagentToolIds.clear();
         agent.activeSubagentToolNames.clear();
         if (!agent.hookDelivered) {

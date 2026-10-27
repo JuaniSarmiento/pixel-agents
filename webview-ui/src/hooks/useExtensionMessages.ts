@@ -38,6 +38,8 @@ export interface SubagentCharacter {
   parentAgentId: number;
   parentToolId: string;
   label: string;
+  /** Detected role key (e.g. "dba", "qa") for this sub-agent, if any. */
+  role?: string;
 }
 
 interface FurnitureAsset {
@@ -491,10 +493,11 @@ export function useExtensionMessages(
           (!runInBackground || !parentHasTeam)
         ) {
           const label = status.startsWith('Subtask:') ? status.slice('Subtask:'.length).trim() : '';
-          const subId = os.addSubagent(id, toolId);
+          const role = msg.role as string | undefined;
+          const subId = os.addSubagent(id, toolId, role);
           setSubagentCharacters((prev) => {
             if (prev.some((s) => s.id === subId)) return prev;
-            return [...prev, { id: subId, parentAgentId: id, parentToolId: toolId, label }];
+            return [...prev, { id: subId, parentAgentId: id, parentToolId: toolId, label, role }];
           });
         }
       } else if (msg.type === 'agentToolDone') {

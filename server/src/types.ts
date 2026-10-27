@@ -14,6 +14,11 @@ export interface AgentState {
   activeToolIds: Set<string>;
   activeToolStatuses: Map<string, string>;
   activeToolNames: Map<string, string>;
+  /** Detected role (e.g. "dba", "qa") per Task/Agent spawn tool id. Lazily
+   *  created, only populated for subagent-spawning tool calls that resolved
+   *  to a known role (see core/src/roles.ts). Mirrors activeToolStatuses'
+   *  lifecycle so a re-broadcast of a live spawn carries its role along. */
+  activeToolRoles?: Map<string, string>;
   activeSubagentToolIds: Map<string, Set<string>>; // parentToolId → active sub-tool IDs
   activeSubagentToolNames: Map<string, Map<string, string>>; // parentToolId → (subToolId → toolName)
   backgroundAgentToolIds: Set<string>; // tool IDs for run_in_background Agent calls (stay alive until queue-operation)

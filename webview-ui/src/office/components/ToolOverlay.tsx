@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
 
+import { getRoleVisual } from '../../../../core/src/roles.js';
 import { Button } from '../../components/ui/Button.js';
 import {
   BUBBLE_FADE_DURATION_SEC,
@@ -19,6 +20,7 @@ import {
   OVERLAY_BUBBLE_Z_INDEX,
   OVERLAY_LABEL_SELECTED_Z_INDEX,
   OVERLAY_LABEL_Z_INDEX,
+  SUBAGENT_ROLE_LABEL_COLOR,
   TEAM_LEAD_COLOR,
   TEAM_ROLE_COLOR,
   TOOL_OVERLAY_VERTICAL_OFFSET,
@@ -161,25 +163,35 @@ export function ToolOverlay({
         const isHovered = hoveredId === id;
         const isSub = ch.isSubagent;
 
-        // Speech bubble (permission dots / done checkmark) — rendered here in
-        // the DOM, above the label panels (OVERLAY_BUBBLE_Z_INDEX over the label panels), for every
-        // character regardless of label visibility. Mirrors the geometry the
-        // canvas renderer used. The idle "Waiting for input" state speaks
-        // through its label, not a bubble.
+        // Speech bubble (permission dots / done checkmark / waiting-for-you) —
+        // rendered here in the DOM, above the label panels (OVERLAY_BUBBLE_Z_INDEX
+        // over the label panels), for every character regardless of label
+        // visibility. Mirrors the geometry the canvas renderer used.
+        //
+        // "Needs approval" (permission) and "waiting on you" (idle,
+        // awaitingInput) are both the agent stuck until a human acts — the
+        // most visible state a character can be in, so both get this bubble
+        // AND a continuous blink (pixel-pulse) instead of a quiet fade. A
+        // plain finished-turn checkmark (waiting, NOT awaitingInput) still
+        // just fades once, same as before.
         let bubbleNode = null;
-        if (ch.bubbleType && !(ch.bubbleType === 'waiting' && ch.waitingAwaitingInput)) {
+        if (ch.bubbleType) {
+          const isAwaitingInputBubble = ch.bubbleType === 'waiting' && ch.waitingAwaitingInput;
+          const needsHuman = ch.bubbleType === 'permission' || isAwaitingInputBubble;
           const cachedBubble = getCachedSprite(
             ch.bubbleType === 'permission' ? BUBBLE_PERMISSION_SPRITE : BUBBLE_WAITING_SPRITE,
             zoom,
           );
           const bubbleSittingOff = ch.state === CharacterState.TYPE ? BUBBLE_SITTING_OFFSET_PX : 0;
           const alpha =
-            ch.bubbleType === 'waiting' && ch.bubbleTimer < BUBBLE_FADE_DURATION_SEC
+            ch.bubbleType === 'waiting' &&
+            !isAwaitingInputBubble &&
+            ch.bubbleTimer < BUBBLE_FADE_DURATION_SEC
               ? ch.bubbleTimer / BUBBLE_FADE_DURATION_SEC
               : 1;
           bubbleNode = (
             <div
-              className="absolute -translate-x-1/2 pointer-events-none"
+              className={`absolute -translate-x-1/2 pointer-events-none ${needsHuman ? 'pixel-pulse' : ''}`}
               style={{
                 left: project.toScreenX(ch.x),
                 // Bubble bottom sits one sprite pixel above the character's
@@ -275,7 +287,21 @@ export function ToolOverlay({
 
         // Team info
         const teamRoleLabel = ch.isTeamLead ? 'LEAD' : ch.agentName || null;
-        const hasExtraLines = !!(ch.directoryName || teamRoleLabel);
+
+        // Detected role (DBA, QA, Auditor...) on a sub-agent: a short tag in
+        // its own fixed color, same spot a team's role label would use --
+        // a sub-agent is never also a team lead/teammate, so the two never
+        // compete for that line. The role's real color identity is the
+        // character's fixed hueShift (see core/src/roles.ts); this label just
+        // marks the line as a role, same idea as TEAM_ROLE_COLOR for teams.
+        const roleVisual = isSub ? getRoleVisual(ch.role) : undefined;
+        const topLabel = teamRoleLabel || roleVisual?.label || null;
+        const topLabelColor = teamRoleLabel
+          ? ch.isTeamLead
+            ? TEAM_LEAD_COLOR
+            : TEAM_ROLE_COLOR
+          : SUBAGENT_ROLE_LABEL_COLOR;
+        const hasExtraLines = !!(ch.directoryName || topLabel);
 
         // Context gauge. Every agent gets one — lead, teammate, adopted,
         // headless — as soon as it has taken a turn. Sub-agents never do: they
@@ -306,16 +332,16 @@ export function ToolOverlay({
                   />
                 )}
                 <div className="flex flex-col gap-0 overflow-hidden">
-                  {teamRoleLabel && (
+                  {topLabel && (
                     <span
                       className="overflow-hidden text-ellipsis block leading-none"
                       style={{
                         fontSize: '18px',
-                        color: ch.isTeamLead ? TEAM_LEAD_COLOR : TEAM_ROLE_COLOR,
+                        color: topLabelColor,
                         fontWeight: ch.isTeamLead ? 'bold' : undefined,
                       }}
                     >
-                      {teamRoleLabel}
+                      {topLabel}
                     </span>
                   )}
                   <span

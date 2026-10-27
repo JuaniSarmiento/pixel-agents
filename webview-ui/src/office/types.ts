@@ -217,6 +217,11 @@ export interface Character {
   isSubagent: boolean;
   /** Parent agent ID if this is a sub-agent, null otherwise */
   parentAgentId: number | null;
+  /** Detected role key (e.g. "dba", "qa", "auditor") for a sub-agent spawn,
+   *  from its subagent_type or description keywords (see core/src/roles.ts).
+   *  Drives a fixed hueShift and a short label in the cartel. Undefined when
+   *  no role was detected -- the character keeps its default appearance. */
+  role?: string;
   /** Active matrix spawn/despawn effect, or null */
   matrixEffect: 'spawn' | 'despawn' | null;
   /** Timer counting up from 0 to MATRIX_EFFECT_DURATION */
