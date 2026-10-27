@@ -24,6 +24,23 @@ import {
 
 // ── formatToolStatus: moved from src/transcriptParser.ts ──
 
+/** Humanizes an MCP tool name ("mcp__<server>__<method>") into "<Server>: <method>",
+ *  e.g. "mcp__chrome__computer" -> "Chrome: computer". Title-cases the server
+ *  segment (dashes/underscores become spaces) and leaves the method as-is. */
+function formatMcpToolStatus(toolName: string): string | null {
+  const parts = toolName.split('__');
+  if (parts.length < 3 || parts[0] !== 'mcp') return null;
+  const [, server, ...methodParts] = parts;
+  const method = methodParts.join('__');
+  if (!server || !method) return null;
+  const humanServer = server
+    .split(/[-_]/)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+  return `${humanServer}: ${method}`;
+}
+
 export function formatToolStatus(toolName: string, input?: unknown): string {
   const inp = (input ?? {}) as Record<string, unknown>;
   const base = (p: unknown) => (typeof p === 'string' ? path.basename(p) : '');
@@ -67,8 +84,12 @@ export function formatToolStatus(toolName: string, input?: unknown): string {
       const recipient = typeof inp.recipient === 'string' ? inp.recipient : '';
       return recipient ? `-> ${recipient}` : 'Sending message';
     }
-    default:
-      return `Using ${toolName}`;
+    case 'TaskStop':
+      return 'Stopping task';
+    default: {
+      const mcpStatus = formatMcpToolStatus(toolName);
+      return mcpStatus ?? `Using ${toolName}`;
+    }
   }
 }
 

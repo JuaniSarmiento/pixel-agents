@@ -257,5 +257,21 @@ describe('claudeProvider', () => {
     it('handles undefined input', () => {
       expect(claudeProvider.formatToolStatus('Read', undefined)).toBe('Reading ');
     });
+    it('formats an MCP tool as "<Server>: <method>"', () => {
+      expect(claudeProvider.formatToolStatus('mcp__chrome__computer', {})).toBe('Chrome: computer');
+    });
+    it('formats a different MCP server/method pair the same way', () => {
+      expect(claudeProvider.formatToolStatus('mcp__engram__mem_search', {})).toBe(
+        'Engram: mem_search',
+      );
+    });
+    it('humanizes a dashed MCP server name', () => {
+      expect(claudeProvider.formatToolStatus('mcp__chrome-devtools__click', {})).toBe(
+        'Chrome Devtools: click',
+      );
+    });
+    it('formats TaskStop', () => {
+      expect(claudeProvider.formatToolStatus('TaskStop', {})).toBe('Stopping task');
+    });
   });
 });
