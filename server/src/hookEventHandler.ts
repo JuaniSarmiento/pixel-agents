@@ -8,6 +8,7 @@ import { getInlineTeammates, hasInlineTeammates, hasPromotedBackgroundAgent } fr
 import { cancelPermissionTimer, cancelWaitingTimer } from './timerManager.js';
 import { notifyBackgroundAgentCompleted } from './transcriptParser.js';
 import type { AgentState } from './types.js';
+import { logWaitingForHuman } from './waitingLog.js';
 
 const debug = process.env.PIXEL_AGENTS_DEBUG !== '0';
 
@@ -606,6 +607,10 @@ export class HookEventHandler {
 
   /** Handle PermissionRequest: cancel heuristic timer, show permission bubble on agent + sub-agents. */
   private handlePermissionRequest(agent: AgentState, agentId: number): void {
+    // The human is now blocking this agent (or a teammate of it) -- log it
+    // for an external notifier (e.g. a WhatsApp ping) to pick up later.
+    logWaitingForHuman(agent.sessionId, agent.directoryName, 'permission');
+
     // When lead has inline teammates, route permission to the teammates instead.
     // The hook fires on the lead's session_id but the permission is for a teammate.
     const inlineTeammates = getInlineTeammates(agentId, this.agents);
@@ -636,6 +641,12 @@ export class HookEventHandler {
 
   /** Handle Stop: Claude finished responding, mark agent as waiting. */
   private handleStop(agent: AgentState, agentId: number, awaitingInput = false): void {
+    // Only the genuinely-idle-on-the-user case (Notification(idle_prompt),
+    // AskUserQuestion) is "waiting for a human" -- a plain finished turn
+    // (Stop) isn't blocked on anyone.
+    if (awaitingInput) {
+      logWaitingForHuman(agent.sessionId, agent.directoryName, 'awaitingInput');
+    }
     this.markAgentWaiting(agent, agentId, awaitingInput);
   }
 

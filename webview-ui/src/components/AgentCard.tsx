@@ -80,7 +80,7 @@ export function AgentCard({
             the card's bottom edge: the span is a fixed-size empty box, so
             padding is invisible — only margin moves it. */}
         <span
-          className={`size-6 shrink-0 relative -left-1 mb-2 ${status ? STATUS_DOT[status] : ''}`}
+          className={`size-6 shrink-0 relative -left-1 mb-2 ${status ? STATUS_DOT[status] : ''} ${status === 'attention' ? 'pixel-pulse' : ''}`}
         />
       </div>
     </div>

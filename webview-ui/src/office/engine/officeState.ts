@@ -869,6 +869,15 @@ export class OfficeState {
     const ch = this.characters.get(id);
     if (ch) {
       ch.isActive = active;
+      if (active && ch.bubbleType === 'waiting') {
+        // The session just moved again -- the "waiting for you" indicator
+        // (persistent while waitingAwaitingInput, or mid-fade otherwise) has
+        // done its job. Clear it directly rather than waiting on the tick
+        // timer, which never counts down the persistent case on its own.
+        ch.bubbleType = null;
+        ch.bubbleTimer = 0;
+        ch.waitingAwaitingInput = false;
+      }
       if (!active) {
         // Sentinel -1: signals turn just ended, skip next seat rest timer.
         // Prevents the WALK handler from setting a 2-4 min rest on arrival.
@@ -988,8 +997,16 @@ export class OfficeState {
       ch.bubbleType = null;
       ch.bubbleTimer = 0;
     } else if (ch.bubbleType === 'waiting') {
-      // Trigger immediate fade (0.3s remaining)
-      ch.bubbleTimer = Math.min(ch.bubbleTimer, DISMISS_BUBBLE_FAST_FADE_SEC);
+      if (ch.waitingAwaitingInput) {
+        // Persistent "waiting for you" bubble doesn't fade on its own -- a
+        // click acknowledges it immediately instead.
+        ch.bubbleType = null;
+        ch.bubbleTimer = 0;
+        ch.waitingAwaitingInput = false;
+      } else {
+        // Trigger immediate fade (0.3s remaining)
+        ch.bubbleTimer = Math.min(ch.bubbleTimer, DISMISS_BUBBLE_FAST_FADE_SEC);
+      }
     }
   }
 
@@ -1199,8 +1216,12 @@ export class OfficeState {
         ),
       );
 
-      // Tick bubble timer for waiting bubbles
-      if (ch.bubbleType === 'waiting') {
+      // Tick bubble timer for waiting bubbles. The "awaiting input" case is
+      // exempt: it must stay up -- visibly, persistently -- until the agent
+      // actually moves again (next tool use / turn clears bubbleType
+      // elsewhere), not fade out after a few seconds like the plain "done"
+      // checkmark. A click can still dismiss it early (see dismissBubble).
+      if (ch.bubbleType === 'waiting' && !ch.waitingAwaitingInput) {
         ch.bubbleTimer -= dt;
         if (ch.bubbleTimer <= 0) {
           ch.bubbleType = null;

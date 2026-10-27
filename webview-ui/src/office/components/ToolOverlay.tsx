@@ -163,25 +163,35 @@ export function ToolOverlay({
         const isHovered = hoveredId === id;
         const isSub = ch.isSubagent;
 
-        // Speech bubble (permission dots / done checkmark) — rendered here in
-        // the DOM, above the label panels (OVERLAY_BUBBLE_Z_INDEX over the label panels), for every
-        // character regardless of label visibility. Mirrors the geometry the
-        // canvas renderer used. The idle "Waiting for input" state speaks
-        // through its label, not a bubble.
+        // Speech bubble (permission dots / done checkmark / waiting-for-you) —
+        // rendered here in the DOM, above the label panels (OVERLAY_BUBBLE_Z_INDEX
+        // over the label panels), for every character regardless of label
+        // visibility. Mirrors the geometry the canvas renderer used.
+        //
+        // "Needs approval" (permission) and "waiting on you" (idle,
+        // awaitingInput) are both the agent stuck until a human acts — the
+        // most visible state a character can be in, so both get this bubble
+        // AND a continuous blink (pixel-pulse) instead of a quiet fade. A
+        // plain finished-turn checkmark (waiting, NOT awaitingInput) still
+        // just fades once, same as before.
         let bubbleNode = null;
-        if (ch.bubbleType && !(ch.bubbleType === 'waiting' && ch.waitingAwaitingInput)) {
+        if (ch.bubbleType) {
+          const isAwaitingInputBubble = ch.bubbleType === 'waiting' && ch.waitingAwaitingInput;
+          const needsHuman = ch.bubbleType === 'permission' || isAwaitingInputBubble;
           const cachedBubble = getCachedSprite(
             ch.bubbleType === 'permission' ? BUBBLE_PERMISSION_SPRITE : BUBBLE_WAITING_SPRITE,
             zoom,
           );
           const bubbleSittingOff = ch.state === CharacterState.TYPE ? BUBBLE_SITTING_OFFSET_PX : 0;
           const alpha =
-            ch.bubbleType === 'waiting' && ch.bubbleTimer < BUBBLE_FADE_DURATION_SEC
+            ch.bubbleType === 'waiting' &&
+            !isAwaitingInputBubble &&
+            ch.bubbleTimer < BUBBLE_FADE_DURATION_SEC
               ? ch.bubbleTimer / BUBBLE_FADE_DURATION_SEC
               : 1;
           bubbleNode = (
             <div
-              className="absolute -translate-x-1/2 pointer-events-none"
+              className={`absolute -translate-x-1/2 pointer-events-none ${needsHuman ? 'pixel-pulse' : ''}`}
               style={{
                 left: project.toScreenX(ch.x),
                 // Bubble bottom sits one sprite pixel above the character's
