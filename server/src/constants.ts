@@ -44,12 +44,10 @@ export const CONTEXT_SEED_TAIL_BYTES = 256 * 1024;
 // ── Global Session Scanning ─────────────────────────────────
 /** Only adopt global JSONL files larger than this (filters out empty/init-only sessions) */
 export const GLOBAL_SCAN_ACTIVE_MIN_SIZE = 3_072; // 3KB
-/** Only adopt global JSONL files modified within this window. Wide on purpose:
- *  a session can sit open but quiet (no tool calls) for a long stretch, and
- *  "Watch All Sessions" exists to surface exactly that, not just the first
- *  10 minutes of activity. The size filter above still screens out empty or
- *  init-only sessions. */
+/** Fallback adoption window when Linux process inspection is unavailable. */
 export const GLOBAL_SCAN_ACTIVE_MAX_AGE_MS = 86_400_000; // 24 hours
+/** Keep recently ended sessions and sub-agents visible briefly without a process. */
+export const SESSION_RECENT_ACTIVITY_MS = 600_000; // 10 minutes
 
 // ── Directory Suggestions ───────────────────────────────────
 /** How much of a session transcript is read to recover the working directory it

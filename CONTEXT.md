@@ -75,7 +75,7 @@ _Avoid_: close, delete
 
 **Orphaned**:
 An agent whose transcript has been deleted, so the session it represents no longer exists. The office removes orphaned agents automatically.
-_Avoid_: stale (implies inactivity or age, which never removes an agent), dead, ended
+_Avoid_: stale, dead, ended. On Linux, adopted agents without a live Claude process also despawn after ten minutes without transcript activity. When process inspection is unavailable, the previous activity windows and cleanup policy apply.
 
 ## Interaction
 

@@ -15,6 +15,8 @@ import * as path from 'path';
 import type { HookProvider } from '../../core/src/provider.js';
 import { createAgentState } from './agentState.js';
 import type { AgentStateStore } from './agentStateStore.js';
+import { readClaudeProcesses, resolveLiveClaudeSessions } from './claudeProcesses.js';
+import { SESSION_RECENT_ACTIVITY_MS } from './constants.js';
 import { DismissalTracker } from './dismissalTracker.js';
 import {
   adoptExternalSessionFromHook,
@@ -479,6 +481,9 @@ export class AgentRuntime {
     if (persisted.length === 0) return;
 
     let maxId = 0;
+    const processes = readClaudeProcesses();
+    const liveByProject = new Map<string, Set<string>>();
+    const now = Date.now();
 
     for (const p of persisted) {
       if (!p.isExternal) continue;
@@ -516,6 +521,24 @@ export class AgentRuntime {
         this.knownJsonlFiles.add(p.jsonlFile);
         if (p.id > maxId) maxId = p.id;
         continue;
+      }
+
+      // A reconnect must not resurrect sessions the periodic cleanup just removed.
+      if (processes !== null) {
+        let liveFiles = liveByProject.get(p.projectDir);
+        if (!liveFiles) {
+          liveFiles = resolveLiveClaudeSessions(p.projectDir, processes);
+          liveByProject.set(p.projectDir, liveFiles);
+        }
+        try {
+          if (
+            !liveFiles.has(p.jsonlFile) &&
+            now - fs.statSync(p.jsonlFile).mtimeMs > SESSION_RECENT_ACTIVITY_MS
+          )
+            continue;
+        } catch {
+          continue;
+        }
       }
 
       const agent = createAgentState({

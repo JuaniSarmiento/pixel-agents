@@ -7,6 +7,7 @@ import type { StateAdapter } from '../../core/src/adapter.js';
 import { AgentRuntime } from '../src/agentRuntime.js';
 import { createAgentState } from '../src/agentState.js';
 import { AgentStateStore } from '../src/agentStateStore.js';
+import * as claudeProcesses from '../src/claudeProcesses.js';
 import { claudeProvider } from '../src/providers/hook/claude/claude.js';
 import type { PersistedAgent } from '../src/types.js';
 
@@ -57,6 +58,7 @@ describe('AgentRuntime.restoreExternalAgents -- does not duplicate an already-li
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     runtime?.dispose();
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
@@ -115,6 +117,49 @@ describe('AgentRuntime.restoreExternalAgents -- does not duplicate an already-li
     runtime.restoreExternalAgents();
 
     expect(store.size).toBe(1);
+    expect(store.has(5)).toBe(true);
+  });
+  it('does not resurrect an inactive persisted session without a live process', () => {
+    vi.spyOn(claudeProcesses, 'readClaudeProcesses').mockReturnValue([]);
+    const old = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    fs.utimesSync(jsonlPath, old, old);
+    const store = new AgentStateStore();
+    store.setAdapter(
+      createMockAdapter([
+        {
+          id: 5,
+          sessionId: 'sess-dup',
+          terminalName: '',
+          isExternal: true,
+          jsonlFile: jsonlPath,
+          projectDir: tmpDir,
+        },
+      ]),
+    );
+    runtime = new AgentRuntime(store, claudeProvider);
+    runtime.restoreExternalAgents();
+    expect(store.size).toBe(0);
+  });
+
+  it('preserves restore fallback when process inspection is unavailable', () => {
+    vi.spyOn(claudeProcesses, 'readClaudeProcesses').mockReturnValue(null);
+    const old = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    fs.utimesSync(jsonlPath, old, old);
+    const store = new AgentStateStore();
+    store.setAdapter(
+      createMockAdapter([
+        {
+          id: 5,
+          sessionId: 'sess-dup',
+          terminalName: '',
+          isExternal: true,
+          jsonlFile: jsonlPath,
+          projectDir: tmpDir,
+        },
+      ]),
+    );
+    runtime = new AgentRuntime(store, claudeProvider);
+    runtime.restoreExternalAgents();
     expect(store.has(5)).toBe(true);
   });
 });

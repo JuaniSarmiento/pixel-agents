@@ -32,6 +32,7 @@ import type { TeamProvider } from '../../core/src/teamProvider.js';
 import type { ITerminalAdapter } from '../../core/src/terminalAdapter.js';
 import { createAgentState } from './agentState.js';
 import type { AgentStateStore } from './agentStateStore.js';
+import { readClaudeProcesses, resolveLiveClaudeSessions } from './claudeProcesses.js';
 import {
   CLEAR_IDLE_THRESHOLD_MS,
   EXTERNAL_ACTIVE_THRESHOLD_MS,
@@ -41,6 +42,7 @@ import {
   GLOBAL_SCAN_ACTIVE_MAX_AGE_MS,
   GLOBAL_SCAN_ACTIVE_MIN_SIZE,
   PROJECT_SCAN_INTERVAL_MS,
+  SESSION_RECENT_ACTIVITY_MS,
 } from './constants.js';
 import { seedContextUsage } from './contextUsage.js';
 import type { DismissalTracker } from './dismissalTracker.js';
@@ -1247,6 +1249,8 @@ export function scanExternalDir(
   }
 
   const now = Date.now();
+  const processes = readClaudeProcesses();
+  const liveFiles = processes === null ? null : resolveLiveClaudeSessions(projectDir, processes);
 
   // If an internal agent in this projectDir is still waiting for its JSONL file
   // (file doesn't exist), skip all adoptions. The agent may have done /resume,
@@ -1344,10 +1348,11 @@ export function scanExternalDir(
       if (leadTracked) continue;
     }
 
-    // Only adopt recently-active files (modified within threshold).
+    // A live process can sit idle indefinitely; otherwise keep a short activity grace.
     try {
       const stat = fs.statSync(file);
-      if (now - stat.mtimeMs > EXTERNAL_ACTIVE_THRESHOLD_MS) continue;
+      const maxAge = liveFiles === null ? EXTERNAL_ACTIVE_THRESHOLD_MS : SESSION_RECENT_ACTIVITY_MS;
+      if (!liveFiles?.has(file) && now - stat.mtimeMs > maxAge) continue;
     } catch {
       continue;
     }
@@ -1423,6 +1428,7 @@ export function scanGlobalProjectDirs(
   }
 
   const now = Date.now();
+  const processes = readClaudeProcesses();
   for (const dirPath of projectDirs) {
     // Skip directories already tracked by workspace scanning
     if (isTrackedProjectDir(dirPath)) continue;
@@ -1437,6 +1443,7 @@ export function scanGlobalProjectDirs(
       continue;
     }
 
+    const liveFiles = processes === null ? null : resolveLiveClaudeSessions(dirPath, processes);
     for (const file of files) {
       if (knownJsonlFiles.has(file)) continue;
       let tracked = false;
@@ -1447,11 +1454,13 @@ export function scanGlobalProjectDirs(
         }
       }
       if (tracked) continue;
-      // Activity filter: >3KB AND modified within 10 minutes
+      // Ignore init-only transcripts; use process evidence or recent activity.
       try {
         const stat = fs.statSync(file);
         if (stat.size < GLOBAL_SCAN_ACTIVE_MIN_SIZE) continue;
-        if (now - stat.mtimeMs > GLOBAL_SCAN_ACTIVE_MAX_AGE_MS) continue;
+        const maxAge =
+          liveFiles === null ? GLOBAL_SCAN_ACTIVE_MAX_AGE_MS : SESSION_RECENT_ACTIVITY_MS;
+        if (!liveFiles?.has(file) && now - stat.mtimeMs > maxAge) continue;
       } catch {
         continue;
       }
@@ -1489,21 +1498,27 @@ export function startStaleExternalAgentCheck(
   hooksEnabledRef?: { current: boolean },
 ): ReturnType<typeof setInterval> {
   return setInterval(() => {
-    // When hooks are active, SessionEnd handles agent cleanup.
-    if (hooksEnabledRef?.current) return;
+    const processes = readClaudeProcesses();
+    // Outside Linux preserve hook-owned cleanup. On Linux this also catches missed SessionEnd hooks.
+    if (processes === null && hooksEnabledRef?.current) return;
+    const liveByProject = new Map<string, Set<string>>();
+    const now = Date.now();
     const toRemove: number[] = [];
 
     for (const [id, agent] of agents) {
       if (!agent.isExternal) continue;
-
-      // Only despawn if the JSONL file has been deleted from disk.
-      // Inactive external agents stay alive so they can resume when
-      // the session continues (e.g., claude --resume).
       try {
-        fs.statSync(agent.jsonlFile);
-        // File still exists — keep the agent alive regardless of mtime
+        const stat = fs.statSync(agent.jsonlFile);
+        if (processes === null) continue; // previous policy: keep while the transcript exists
+        let liveFiles = liveByProject.get(agent.projectDir);
+        if (!liveFiles) {
+          liveFiles = resolveLiveClaudeSessions(agent.projectDir, processes);
+          liveByProject.set(agent.projectDir, liveFiles);
+        }
+        if (!liveFiles.has(agent.jsonlFile) && now - stat.mtimeMs > SESSION_RECENT_ACTIVITY_MS) {
+          toRemove.push(id);
+        }
       } catch {
-        // File deleted — remove agent
         toRemove.push(id);
       }
     }
